@@ -36,16 +36,6 @@ import (
 
 const usesLR = sys.MinFrameSize > 0
 
-var skipPC uintptr
-
-func tracebackinit() {
-	// Go variable initialization happens late during runtime startup.
-	// Instead of initializing the variables above in the declarations,
-	// schedinit calls this function so that the variables are
-	// initialized and available earlier in the startup sequence.
-	skipPC = funcPC(skipPleaseUseCallersFrames)
-}
-
 // Traceback over the deferred function calls.
 // Report them like calls that have been invoked but not started executing yet.
 func tracebackdefers(gp *g, callback func(*stkframe, unsafe.Pointer) bool, v unsafe.Pointer) {
@@ -82,9 +72,6 @@ func tracebackdefers(gp *g, callback func(*stkframe, unsafe.Pointer) bool, v uns
 }
 
 const sizeofSkipFunction = 256
-
-// This function is defined in asm.s to be sizeofSkipFunction bytes long.
-func skipPleaseUseCallersFrames()
 
 // Generic traceback. Handles runtime stack prints (pcbuf == nil),
 // the runtime.Callers function (pcbuf != nil), as well as the garbage
@@ -282,9 +269,9 @@ func gentraceback(pc0, sp0, lr0 uintptr, gp *g, skip int, pcbuf *uintptr, max in
 			frame.varp -= sys.RegSize
 		}
 
-		// If framepointer_enabled and there's a frame, then
-		// there's a saved bp here.
-		if frame.varp > frame.sp && (framepointer_enabled && GOARCH == "amd64" || GOARCH == "arm64") {
+		// For architectures with frame pointers, if there's
+		// a frame, then there's a saved frame pointer here.
+		if frame.varp > frame.sp && (GOARCH == "amd64" || GOARCH == "arm64") {
 			frame.varp -= sys.RegSize
 		}
 

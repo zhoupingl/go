@@ -837,6 +837,9 @@ var optab = []Optab{
 	{obj.APCDATA, C_VCON, C_NONE, C_NONE, C_VCON, 0, 0, 0, 0, 0},
 	{obj.AFUNCDATA, C_VCON, C_NONE, C_NONE, C_ADDR, 0, 0, 0, 0, 0},
 	{obj.ANOP, C_NONE, C_NONE, C_NONE, C_NONE, 0, 0, 0, 0, 0},
+	{obj.ANOP, C_LCON, C_NONE, C_NONE, C_NONE, 0, 0, 0, 0, 0}, // nop variants, see #40689
+	{obj.ANOP, C_REG, C_NONE, C_NONE, C_NONE, 0, 0, 0, 0, 0},
+	{obj.ANOP, C_VREG, C_NONE, C_NONE, C_NONE, 0, 0, 0, 0, 0},
 	{obj.ADUFFZERO, C_NONE, C_NONE, C_NONE, C_SBRA, 5, 4, 0, 0, 0}, // same as AB/ABL
 	{obj.ADUFFCOPY, C_NONE, C_NONE, C_NONE, C_SBRA, 5, 4, 0, 0, 0}, // same as AB/ABL
 	{obj.APCALIGN, C_LCON, C_NONE, C_NONE, C_NONE, 0, 0, 0, 0, 0},  // align code
@@ -974,8 +977,8 @@ func span7(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
 			o = c.oplook(p)
 
 			/* very large branches */
-			if (o.type_ == 7 || o.type_ == 39 || o.type_ == 40) && p.Pcond != nil { // 7: BEQ and like, 39: CBZ and like, 40: TBZ and like
-				otxt := p.Pcond.Pc - pc
+			if (o.type_ == 7 || o.type_ == 39 || o.type_ == 40) && p.To.Target() != nil { // 7: BEQ and like, 39: CBZ and like, 40: TBZ and like
+				otxt := p.To.Target().Pc - pc
 				var toofar bool
 				switch o.type_ {
 				case 7, 39: // branch instruction encodes 19 bits
@@ -989,14 +992,14 @@ func span7(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
 					p.Link = q
 					q.As = AB
 					q.To.Type = obj.TYPE_BRANCH
-					q.Pcond = p.Pcond
-					p.Pcond = q
+					q.To.SetTarget(p.To.Target())
+					p.To.SetTarget(q)
 					q = c.newprog()
 					q.Link = p.Link
 					p.Link = q
 					q.As = AB
 					q.To.Type = obj.TYPE_BRANCH
-					q.Pcond = q.Link.Link
+					q.To.SetTarget(q.Link.Link)
 					bflag = 1
 				}
 			}
@@ -1120,7 +1123,7 @@ func (c *ctxt7) flushpool(p *obj.Prog, skip int) {
 			q := c.newprog()
 			q.As = AB
 			q.To.Type = obj.TYPE_BRANCH
-			q.Pcond = p.Link
+			q.To.SetTarget(p.Link)
 			q.Link = c.blitrl
 			q.Pos = p.Pos
 			c.blitrl = q
@@ -1246,7 +1249,7 @@ func (c *ctxt7) addpool(p *obj.Prog, a *obj.Addr) {
 
 	for q := c.blitrl; q != nil; q = q.Link { /* could hash on t.t0.offset */
 		if q.To == t.To {
-			p.Pcond = q
+			p.Pool = q
 			return
 		}
 	}
@@ -1263,7 +1266,7 @@ func (c *ctxt7) addpool(p *obj.Prog, a *obj.Addr) {
 	c.elitrl = q
 	c.pool.size = -c.pool.size & (funcAlign - 1)
 	c.pool.size += uint32(sz)
-	p.Pcond = q
+	p.Pool = q
 }
 
 func (c *ctxt7) regoff(a *obj.Addr) uint32 {
@@ -2747,6 +2750,7 @@ func buildop(ctxt *obj.Link) {
 			oprangeset(AAESIMC, t)
 			oprangeset(ASHA1SU1, t)
 			oprangeset(ASHA256SU0, t)
+			oprangeset(ASHA512SU0, t)
 
 		case ASHA1C:
 			oprangeset(ASHA1P, t)
@@ -2754,9 +2758,12 @@ func buildop(ctxt *obj.Link) {
 
 		case ASHA256H:
 			oprangeset(ASHA256H2, t)
+			oprangeset(ASHA512H, t)
+			oprangeset(ASHA512H2, t)
 
 		case ASHA1SU0:
 			oprangeset(ASHA256SU1, t)
+			oprangeset(ASHA512SU1, t)
 
 		case AVADDV:
 			oprangeset(AVUADDLV, t)
@@ -2891,6 +2898,7 @@ func (c *ctxt7) checkoffset(p *obj.Prog, as obj.As) {
 	}
 	opcode := (list >> 12) & 15
 	q := (list >> 30) & 1
+	size := (list >> 10) & 3
 	if offset == 0 {
 		return
 	}
@@ -2906,8 +2914,16 @@ func (c *ctxt7) checkoffset(p *obj.Prog, as obj.As) {
 	default:
 		c.ctxt.Diag("invalid register numbers in ARM64 register list: %v", p)
 	}
-	if !(q == 0 && offset == n*8) && !(q == 1 && offset == n*16) {
-		c.ctxt.Diag("invalid post-increment offset: %v", p)
+
+	switch as {
+	case AVLD1R, AVLD2R, AVLD3R, AVLD4R:
+		if offset != n*(1<<uint(size)) {
+			c.ctxt.Diag("invalid post-increment offset: %v", p)
+		}
+	default:
+		if !(q == 0 && offset == n*8) && !(q == 1 && offset == n*16) {
+			c.ctxt.Diag("invalid post-increment offset: %v", p)
+		}
 	}
 
 	switch as {
@@ -4794,7 +4810,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 			Q = 1
 			b = 15
 		} else {
-			c.ctxt.Diag("invalid arrangement, should be 8B or 16B: %v", p)
+			c.ctxt.Diag("invalid arrangement, should be B8 or B16: %v", p)
 			break
 		}
 
@@ -5390,6 +5406,18 @@ func (c *ctxt7) oprrr(p *obj.Prog, a obj.As) uint32 {
 
 	case ASHA256SU0:
 		return 0x5E<<24 | 2<<20 | 8<<16 | 2<<12 | 2<<10
+
+	case ASHA512H:
+		return 0xCE<<24 | 3<<21 | 8<<12
+
+	case ASHA512H2:
+		return 0xCE<<24 | 3<<21 | 8<<12 | 4<<8
+
+	case ASHA512SU1:
+		return 0xCE<<24 | 3<<21 | 8<<12 | 8<<8
+
+	case ASHA512SU0:
+		return 0xCE<<24 | 3<<22 | 8<<12
 
 	case AFCVTZSD:
 		return FPCVTI(1, 0, 1, 3, 0)
@@ -6023,15 +6051,21 @@ func (c *ctxt7) opimm(p *obj.Prog, a obj.As) uint32 {
 func (c *ctxt7) brdist(p *obj.Prog, preshift int, flen int, shift int) int64 {
 	v := int64(0)
 	t := int64(0)
-	if p.Pcond != nil {
-		v = (p.Pcond.Pc >> uint(preshift)) - (c.pc >> uint(preshift))
+	q := p.To.Target()
+	if q == nil {
+		// TODO: don't use brdist for this case, as it isn't a branch.
+		// (Calls from omovlit, and maybe adr/adrp opcodes as well.)
+		q = p.Pool
+	}
+	if q != nil {
+		v = (q.Pc >> uint(preshift)) - (c.pc >> uint(preshift))
 		if (v & ((1 << uint(shift)) - 1)) != 0 {
 			c.ctxt.Diag("misaligned label\n%v", p)
 		}
 		v >>= uint(shift)
 		t = int64(1) << uint(flen-1)
 		if v < -t || v >= t {
-			c.ctxt.Diag("branch too far %#x vs %#x [%p]\n%v\n%v", v, t, c.blitrl, p, p.Pcond)
+			c.ctxt.Diag("branch too far %#x vs %#x [%p]\n%v\n%v", v, t, c.blitrl, p, q)
 			panic("branch too far")
 		}
 	}
@@ -6507,7 +6541,7 @@ func (c *ctxt7) oaddi(p *obj.Prog, o1 int32, v int32, r int, rt int) uint32 {
  */
 func (c *ctxt7) omovlit(as obj.As, p *obj.Prog, a *obj.Addr, dr int) uint32 {
 	var o1 int32
-	if p.Pcond == nil { /* not in literal pool */
+	if p.Pool == nil { /* not in literal pool */
 		c.aclass(a)
 		c.ctxt.Logf("omovlit add %d (%#x)\n", c.instoffset, uint64(c.instoffset))
 
@@ -6533,11 +6567,11 @@ func (c *ctxt7) omovlit(as obj.As, p *obj.Prog, a *obj.Addr, dr int) uint32 {
 			w = 1 /* 64-bit SIMD/FP */
 
 		case AMOVD:
-			if p.Pcond.As == ADWORD {
+			if p.Pool.As == ADWORD {
 				w = 1 /* 64-bit */
-			} else if p.Pcond.To.Offset < 0 {
+			} else if p.Pool.To.Offset < 0 {
 				w = 2 /* 32-bit, sign-extended to 64-bit */
-			} else if p.Pcond.To.Offset >= 0 {
+			} else if p.Pool.To.Offset >= 0 {
 				w = 0 /* 32-bit, zero-extended to 64-bit */
 			} else {
 				c.ctxt.Diag("invalid operand %v in %v", a, p)
