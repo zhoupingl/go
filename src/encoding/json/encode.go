@@ -1177,6 +1177,15 @@ func (x byIndex) Less(i, j int) bool {
 	return len(x[i].index) < len(x[j].index)
 }
 
+var tag = "json"
+
+func SetTag(t string) {
+	t = strings.TrimSpace(t)
+	if t != "" {
+		tag = t
+	}
+}
+
 // typeFields returns a list of fields that JSON should recognize for the given type.
 // The algorithm is breadth-first search over the set of structs to include - the top struct
 // and then any reachable anonymous structs.
@@ -1226,7 +1235,7 @@ func typeFields(t reflect.Type) structFields {
 					// Ignore unexported non-embedded fields.
 					continue
 				}
-				tag := sf.Tag.Get("json")
+				tag := sf.Tag.Get(tag)
 				if tag == "-" {
 					continue
 				}
